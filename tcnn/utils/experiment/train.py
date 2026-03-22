@@ -29,6 +29,8 @@ def train_one_epoch(
     optimizer,
     device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
     task="multiclass",
+    show_progress: bool = False,
+    progress_desc: str = "train",
 ):
     """
     Trains the model for one epoch.
@@ -57,7 +59,17 @@ def train_one_epoch(
     model.train()
     total_loss = 0
     correct = 0
-    for batch_idx, (data, target) in enumerate(train_loader):
+    data_iter = enumerate(train_loader)
+    if show_progress:
+        data_iter = tqdm(
+            data_iter,
+            total=len(train_loader),
+            desc=progress_desc,
+            leave=False,
+            mininterval=0.5,
+        )
+
+    for batch_idx, (data, target) in data_iter:
         data = data.to(device)
         target = target.to(device)
 
@@ -126,6 +138,8 @@ def test_one_epoch(
     crtiterion,
     device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
     task="multiclass",
+    show_progress: bool = False,
+    progress_desc: str = "val",
 ):
     """
     Tests the model on the test data.
@@ -150,7 +164,17 @@ def test_one_epoch(
     model.eval()
     correct = 0
     total_loss = 0
-    for data, target in dataloader:
+    data_iter = dataloader
+    if show_progress:
+        data_iter = tqdm(
+            data_iter,
+            total=len(dataloader),
+            desc=progress_desc,
+            leave=False,
+            mininterval=0.5,
+        )
+
+    for data, target in data_iter:
         data = data.to(device)
         target = target.to(device)
 
@@ -240,6 +264,8 @@ def train_and_test_model(
     best_accuracy = 0
     if torch.cuda.device_count() >= 1:
         model = torch.nn.DataParallel(model).to(device)
+    else:
+        model = model.to(device)
 
     print(f"Training on {device} and {torch.cuda.device_count()} GPUs:")
     if torch.cuda.is_available():
@@ -280,10 +306,19 @@ def train_and_test_model(
             optimizer,
             device=device,
             task=task,
+            show_progress=output_logs,
+            progress_desc=f"train e{epoch}",
         )
 
         test_accuracy, test_loss = test_one_epoch(
-            model, epoch, test_dataloader, criterion, device=device, task=task
+            model,
+            epoch,
+            test_dataloader,
+            criterion,
+            device=device,
+            task=task,
+            show_progress=output_logs,
+            progress_desc=f"val e{epoch}",
         )
 
         "scheduler"
