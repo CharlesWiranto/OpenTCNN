@@ -8,6 +8,7 @@ import cpuinfo
 import numpy as np
 import torch
 import torch.nn.functional as F
+from torch.utils.data.dataloader import default_collate
 from matplotlib import pyplot as plt
 from sklearn.metrics import (
     classification_report,
@@ -22,6 +23,34 @@ from tqdm import tqdm
 from tcnn.utils.experiment.model import count_parameters
 
 
+def _iter_compile_batches(dataloader):
+    dataset = getattr(dataloader, "dataset", None)
+    batch_sampler = getattr(dataloader, "batch_sampler", None)
+    if dataset is None or batch_sampler is None:
+        return None
+    if not hasattr(dataset, "__getitem__"):
+        return None
+
+    batch_iter = iter(batch_sampler)
+    try:
+        first_indices = next(batch_iter)
+    except StopIteration:
+        return []
+
+    last_indices = None
+    for batch_indices in batch_iter:
+        last_indices = batch_indices
+
+    batches = [first_indices]
+    if last_indices is not None and list(last_indices) != list(first_indices):
+        batches.append(last_indices)
+
+    collate_fn = dataloader.collate_fn or default_collate
+    for indices in batches:
+        samples = [dataset[i] for i in indices]
+        yield collate_fn(samples)
+
+
 def train_one_epoch(
     model,
     train_loader,
@@ -31,6 +60,7 @@ def train_one_epoch(
     task="multiclass",
     show_progress: bool = False,
     progress_desc: str = "train",
+    compile_mode=False,
 ):
     """
     Trains the model for one epoch.
@@ -59,17 +89,33 @@ def train_one_epoch(
     model.train()
     total_loss = 0
     correct = 0
-    data_iter = enumerate(train_loader)
+    if compile_mode:
+        compile_batches = _iter_compile_batches(train_loader)
+        if compile_batches is not None:
+            compile_batches = list(compile_batches)
+            data_iter = enumerate(compile_batches)
+            num_batch = len(compile_batches)
+        else:
+            data_iter = enumerate(train_loader)
+            num_batch = len(train_loader)
+    else:
+        data_iter = enumerate(train_loader)
+        num_batch = len(train_loader)
     if show_progress:
         data_iter = tqdm(
             data_iter,
-            total=len(train_loader),
+            total=num_batch,
             desc=progress_desc,
             leave=False,
             mininterval=0.5,
         )
 
     for batch_idx, (data, target) in data_iter:
+        if compile_mode:
+            if batch_idx == 0:
+                print("Compiling the model for the first batch...")
+            elif batch_idx == num_batch - 1:
+                print("Compiling last batch...")
         data = data.to(device)
         target = target.to(device)
 
@@ -140,6 +186,7 @@ def test_one_epoch(
     task="multiclass",
     show_progress: bool = False,
     progress_desc: str = "val",
+    compile_mode=False,
 ):
     """
     Tests the model on the test data.
@@ -164,17 +211,33 @@ def test_one_epoch(
     model.eval()
     correct = 0
     total_loss = 0
-    data_iter = dataloader
+    if compile_mode:
+        compile_batches = _iter_compile_batches(dataloader)
+        if compile_batches is not None:
+            compile_batches = list(compile_batches)
+            data_iter = enumerate(compile_batches)
+            num_batch = len(compile_batches)
+        else:
+            data_iter = enumerate(dataloader)
+            num_batch = len(dataloader)
+    else:
+        data_iter = enumerate(dataloader)
+        num_batch = len(dataloader)
     if show_progress:
         data_iter = tqdm(
             data_iter,
-            total=len(dataloader),
+            total=num_batch,
             desc=progress_desc,
             leave=False,
             mininterval=0.5,
         )
 
-    for data, target in data_iter:
+    for batch_idx, (data, target) in data_iter:
+        if compile_mode:
+            if batch_idx == 0:
+                print("Compiling the model for the first batch...")
+            elif batch_idx == num_batch - 1:
+                print("Compiling last batch...")
         data = data.to(device)
         target = target.to(device)
 
@@ -208,6 +271,7 @@ def train_and_test_model(
     save_checkpoint_interval=10,
     checkpoint_save_dir="./checkpoints/",
     task="multiclass",
+    compile_mode=False,
 ):
     """
     Trains and tests the given model for a specified number of epochs.
@@ -227,6 +291,7 @@ def train_and_test_model(
         checkpoint_path (str, optional): The path to save the model checkpoint. Defaults to None.
         save_checkpoint_interval (int, optional): The interval at which to save the model checkpoint. Defaults to 10.
         checkpoint_save_dir (str, optional): The directory to save the model checkpoint. Defaults to './checkpoints/'.
+        compile_mode (bool, optional): Whether to compile the model. Defaults to False.
 
     Returns:
         dict: A dictionary containing the training and testing loss and accuracy.
@@ -307,7 +372,8 @@ def train_and_test_model(
             device=device,
             task=task,
             show_progress=output_logs,
-            progress_desc=f"train e{epoch}",
+            progress_desc=f"{'COMPILING: ' if compile_mode else ''}train e{epoch}",
+            compile_mode=compile_mode,
         )
 
         test_accuracy, test_loss = test_one_epoch(
@@ -318,7 +384,8 @@ def train_and_test_model(
             device=device,
             task=task,
             show_progress=output_logs,
-            progress_desc=f"val e{epoch}",
+            progress_desc=f"{'COMPILING: ' if compile_mode else ''}val e{epoch}",
+            compile_mode=compile_mode,
         )
 
         "scheduler"
@@ -401,6 +468,7 @@ def eval_model(
     device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
     stage="Test",
     plot=True,
+    compile_mode=False,
 ):
     """
     Evaluates the model on the test data.
@@ -427,7 +495,25 @@ def eval_model(
     all_preds = []
     all_preds_probs = []
     all_targets = []
-    for data, target in test_dataloader:
+    if compile_mode:
+        compile_batches = _iter_compile_batches(test_dataloader)
+        if compile_batches is not None:
+            compile_batches = list(compile_batches)
+            data_iter = enumerate(compile_batches)
+            num_batch = len(compile_batches)
+        else:
+            data_iter = enumerate(test_dataloader)
+            num_batch = len(test_dataloader)
+    else:
+        data_iter = enumerate(test_dataloader)
+        num_batch = len(test_dataloader)
+
+    for batch_idx, (data, target) in data_iter:
+        if compile_mode:
+            if batch_idx == 0:
+                print("Compiling the model for the first batch...")
+            elif batch_idx == num_batch - 1:
+                print("Compiling last batch...")
         data = data.to(device)
         target = target.to(device)
 
