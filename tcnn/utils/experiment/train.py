@@ -61,6 +61,7 @@ def train_one_epoch(
     show_progress: bool = False,
     progress_desc: str = "train",
     compile_mode=False,
+    log_interval: int = 10,
 ):
     """
     Trains the model for one epoch.
@@ -126,11 +127,20 @@ def train_one_epoch(
             pred = get_likely_index(output)
         elif task == "binary":
             pred = torch.round(output)
-        correct += number_of_correct(pred, target)
+        batch_correct = number_of_correct(pred, target)
+        correct += batch_correct
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         total_loss += loss.item()
+        if log_interval and ((batch_idx + 1) % log_interval == 0 or batch_idx == num_batch - 1):
+            batch_acc = 100.0 * batch_correct / max(1, len(target))
+            if show_progress and hasattr(data_iter, "set_postfix"):
+                data_iter.set_postfix(loss=f"{loss.item():.4f}", acc=f"{batch_acc:.2f}%")
+            else:
+                print(
+                    f"{progress_desc} iter {batch_idx + 1}/{num_batch}: loss={loss.item():.4f}, acc={batch_acc:.2f}%"
+                )
     accuracy = 100.0 * correct / len(train_loader.dataset)
 
     return total_loss, accuracy
@@ -187,6 +197,7 @@ def test_one_epoch(
     show_progress: bool = False,
     progress_desc: str = "val",
     compile_mode=False,
+    log_interval: int = 10,
 ):
     """
     Tests the model on the test data.
@@ -248,9 +259,18 @@ def test_one_epoch(
             pred = get_likely_index(output)
         elif task == "binary":
             pred = torch.round(output)
-        correct += number_of_correct(pred, target)
+        batch_correct = number_of_correct(pred, target)
+        correct += batch_correct
 
         total_loss += loss.item()
+        if log_interval and ((batch_idx + 1) % log_interval == 0 or batch_idx == num_batch - 1):
+            batch_acc = 100.0 * batch_correct / max(1, len(target))
+            if show_progress and hasattr(data_iter, "set_postfix"):
+                data_iter.set_postfix(loss=f"{loss.item():.4f}", acc=f"{batch_acc:.2f}%")
+            else:
+                print(
+                    f"{progress_desc} iter {batch_idx + 1}/{num_batch}: loss={loss.item():.4f}, acc={batch_acc:.2f}%"
+                )
 
     accuracy = 100.0 * correct / len(dataloader.dataset)
     return accuracy, total_loss
@@ -272,6 +292,7 @@ def train_and_test_model(
     checkpoint_save_dir="./checkpoints/",
     task="multiclass",
     compile_mode=False,
+    log_interval: int = 10,
 ):
     """
     Trains and tests the given model for a specified number of epochs.
@@ -374,6 +395,7 @@ def train_and_test_model(
             show_progress=output_logs,
             progress_desc=f"{'COMPILING: ' if compile_mode else ''}train e{epoch}",
             compile_mode=compile_mode,
+            log_interval=log_interval,
         )
 
         test_accuracy, test_loss = test_one_epoch(
@@ -386,6 +408,7 @@ def train_and_test_model(
             show_progress=output_logs,
             progress_desc=f"{'COMPILING: ' if compile_mode else ''}val e{epoch}",
             compile_mode=compile_mode,
+            log_interval=log_interval,
         )
 
         "scheduler"
