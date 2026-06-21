@@ -1,6 +1,7 @@
 import glob
 import os
 import time
+import copy
 from math import e
 from unittest import result
 
@@ -293,6 +294,7 @@ def train_and_test_model(
     task="multiclass",
     compile_mode=False,
     log_interval: int = 10,
+    load_optimizer_from_checkpoint=True,
 ):
     """
     Trains and tests the given model for a specified number of epochs.
@@ -338,6 +340,8 @@ def train_and_test_model(
         "test_loss": [],
         "lr": [],
     }
+    if compile_mode:
+        model = copy.deepcopy(model)
     if save_checkpoint:
         os.makedirs(checkpoint_save_dir, exist_ok=True)
         print(f"Checkpoints will be saved in {checkpoint_save_dir}")
@@ -367,7 +371,8 @@ def train_and_test_model(
     if save_checkpoint and checkpoint_path is not None:
         checkpoint = torch.load(checkpoint_path)
         model.load_state_dict(checkpoint["model_state_dict"])
-        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        if load_optimizer_from_checkpoint:
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         start_epochs = checkpoint["epoch"] + 1
         history["train_loss"] = checkpoint["train_loss"]
         history["test_loss"] = checkpoint["test_loss"]
@@ -531,32 +536,34 @@ def eval_model(
         data_iter = enumerate(test_dataloader)
         num_batch = len(test_dataloader)
 
-    for batch_idx, (data, target) in data_iter:
-        if compile_mode:
-            if batch_idx == 0:
-                print("Compiling the model for the first batch...")
-            elif batch_idx == num_batch - 1:
-                print("Compiling last batch...")
-        data = data.to(device)
-        target = target.to(device)
+    # Disable gradient computation for evaluation to make inference timing fair
+    with torch.no_grad():
+        for batch_idx, (data, target) in data_iter:
+            if compile_mode:
+                if batch_idx == 0:
+                    print("Compiling the model for the first batch...")
+                elif batch_idx == num_batch - 1:
+                    print("Compiling last batch...")
+            data = data.to(device)
+            target = target.to(device)
 
-        output = model(data)
-        loss = criterion(output, target)
-        total_loss += loss.item()
+            output = model(data)
+            loss = criterion(output, target)
+            total_loss += loss.item()
 
-        if task == "multiclass":
-            pred = get_likely_index(output)
-        elif task == "binary":
-            pred = torch.round(output)
-        correct += number_of_correct(pred, target)
+            if task == "multiclass":
+                pred = get_likely_index(output)
+            elif task == "binary":
+                pred = torch.round(output)
+            correct += number_of_correct(pred, target)
 
-        if task == "multiclass":
-            all_preds_probs.extend(F.softmax(output, dim=1).cpu().detach().numpy())
-        elif task == "binary":
-            all_preds_probs.extend(output.cpu().detach().numpy())
+            if task == "multiclass":
+                all_preds_probs.extend(F.softmax(output, dim=1).cpu().detach().numpy())
+            elif task == "binary":
+                all_preds_probs.extend(output.cpu().detach().numpy())
 
-        all_preds.extend(pred.cpu().detach().numpy())
-        all_targets.extend(target.cpu().detach().numpy())
+            all_preds.extend(pred.cpu().detach().numpy())
+            all_targets.extend(target.cpu().detach().numpy())
 
     accuracy = 100.0 * correct / len(test_dataloader.dataset)
     print(
